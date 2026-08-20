@@ -1,1 +1,8 @@
-
+streamlit
+streamlit-autorefresh
+yfinance
+pandas
+plotly
+pytz
+requests
+tradingview-ta
