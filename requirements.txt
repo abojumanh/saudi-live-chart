@@ -6,3 +6,4 @@ plotly
 pytz
 requests
 tradingview-ta
+feedparser
