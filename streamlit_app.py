@@ -26,7 +26,7 @@ MARKET_OPEN = dtime(10, 0)
 OPENING_RANGE_MINUTES = 15
 REFRESH_SECONDS = 30
 
-# أسماء الشركات بالعربي لكل رمز
+# أسماء الشركات بالعربي لكل رمز (كلها بورصة تداول)
 STOCK_NAMES = {
     "2222": "أرامكو السعودية",
     "1120": "مصرف الراجحي",
@@ -55,7 +55,6 @@ STOCK_NAMES = {
     "1111": "مجموعة تداول",
 }
 
-# قائمة أسهمك (كلها بورصة تداول)
 WATCHLIST = list(STOCK_NAMES.keys())
 CUSTOM_OPTION = "سهم آخر (اكتبه يدوياً)"
 
@@ -80,6 +79,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# كلمات مفتاحية إنجليزية تدل على خبر إيجابي محتمل (عناوين الأخبار تجي إنجليزي غالباً)
+POSITIVE_NEWS_KEYWORDS = [
+    "beats", "surge", "approval", "upgrade", "raises guidance",
+    "strong buy", "record revenue", "contract win",
+]
+
 if "armed" not in st.session_state:
     st.session_state.armed = {}
 
@@ -92,13 +97,6 @@ elif ntfy_choice == "بدون إشعارات (تعطيل)":
     ntfy_topic = ""
 else:
     ntfy_topic = ntfy_choice
-
-# كلمات مفتاحية إنجليزية تدل على خبر إيجابي محتمل (عناوين ياهو فاينانس
-# للأسهم السعودية تجي إنجليزي غالباً، حتى لو الشركة سعودية)
-POSITIVE_NEWS_KEYWORDS = [
-    "beats", "surge", "approval", "upgrade", "raises guidance",
-    "strong buy", "record revenue", "contract win",
-]
 
 watch_all = st.checkbox(
     "راقب كل أسهم القائمة معاً وأرسل تنبيه لأي اختراق (يحتاج قناة ntfy أعلاه)",
@@ -190,8 +188,7 @@ def fetch_and_prepare(sym: str):
 def get_technical_outlook(sym: str):
     """تحليل فني من تريدنج فيو لسوق تداول. المكتبة غير موثقة رسمياً
     لاسم screener الصحيح للسوق السعودي، فنجرب عدة احتمالات معروفة
-    بالترتيب. لو فشلت كلها (تحليل تريدنج فيو فعلاً غير مدعوم لهذا
-    الرمز)، يرجع None ويُعرض 'غير متاح' بصراحة."""
+    بالترتيب. لو فشلت كلها، يرجع None ويُعرض 'غير متاح' بصراحة."""
     candidates = [
         ("saudiarabia", "TADAWUL"),
         ("ksa", "TADAWUL"),
@@ -269,7 +266,8 @@ if watch_all:
     st.markdown(f"<style>{''.join(style_blocks)}</style>", unsafe_allow_html=True)
     st.caption(
         "⬆️ = التحليل الفني يميل للشراء — ⬇️ = يميل للبيع — ➡️ = محايد\n\n"
-        "🟢/🔴 = عدد المؤشرات الفنية المؤيدة للشراء/البيع (من تريدنج فيو)"
+        "🟢/🔴 = عدد المؤشرات الفنية المؤيدة للشراء/البيع (من تريدنج فيو) — "
+        "هذي أصوات مؤشرات تحليلية، وليست عدد صفقات فعلية منفذة في السوق"
     )
 
     custom_typed = st.text_input("أو اكتب رمز سهم آخر (رقم فقط)", value="")
@@ -280,17 +278,17 @@ if watch_all:
 else:
     col1, col2 = st.columns([2, 2])
     with col1:
-        display_options = [f"{s} - {STOCK_NAMES[s]}" for s in WATCHLIST] + [CUSTOM_OPTION]
-        current = st.session_state.selected_symbol
-        default_label = f"{current} - {STOCK_NAMES[current]}" if current in STOCK_NAMES else CUSTOM_OPTION
-        default_index = display_options.index(default_label) if default_label in display_options else 0
-        choice = st.selectbox("اختر من قائمتك", display_options, index=default_index)
+        options = WATCHLIST + [CUSTOM_OPTION]
+        default_index = options.index(st.session_state.selected_symbol) if st.session_state.selected_symbol in WATCHLIST else 0
+        display_options = [f"{s} - {STOCK_NAMES[s]}" if s in STOCK_NAMES else s for s in options]
+        choice_display = st.selectbox("اختر من قائمتك", display_options, index=default_index)
+        choice = choice_display.split(" - ")[0] if " - " in choice_display else choice_display
     with col2:
         if choice == CUSTOM_OPTION:
             typed = st.text_input("أو اكتب رمز سهم آخر (رقم فقط)", value="")
             symbol = typed.strip() or "2222"
         else:
-            symbol = choice.split(" - ")[0]
+            symbol = choice
     st.session_state.selected_symbol = symbol
 
 
@@ -311,8 +309,6 @@ def send_ntfy_alert(topic: str, title: str, message: str, click_url: str = "") -
 
 
 def check_new_ipos_and_notify(topic: str):
-    """يفحص اكتتابات جديدة عبر Finnhub (تغطية عالمية عامة، مو مخصصة
-    لتداول تحديداً)، ويرسل تنبيه لكل اكتتاب جديد لم يُرسل عنه من قبل."""
     if not topic:
         return
     try:
@@ -350,8 +346,6 @@ def check_new_ipos_and_notify(topic: str):
 
 
 def check_stock_news_and_notify(topic: str):
-    """يفحص أخبار كل سهم من القائمة عبر RSS ياهو فاينانس (رمز.SR)،
-    ويرسل تنبيه فقط للأخبار اللي عنوانها يحتوي كلمة مفتاحية إيجابية."""
     if not topic:
         return
     for sym in WATCHLIST:
@@ -380,9 +374,27 @@ def check_stock_news_and_notify(topic: str):
             continue
 
 
+# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)
+if "seen_ipos" not in st.session_state:
+    st.session_state.seen_ipos = set()
+if "last_ipo_check" not in st.session_state:
+    st.session_state.last_ipo_check = 0
+if "seen_news_links" not in st.session_state:
+    st.session_state.seen_news_links = set()
+if "last_news_check" not in st.session_state:
+    st.session_state.last_news_check = 0
+
+_now_ts = datetime.now(SA_TZ).timestamp()
+if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
+    check_new_ipos_and_notify(ntfy_topic)
+    st.session_state.last_ipo_check = _now_ts
+
+if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
+    check_stock_news_and_notify(ntfy_topic)
+    st.session_state.last_news_check = _now_ts
+
+
 def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
-    """يرسل تنبيهاً مرة واحدة بالضبط عند لحظة الاختراق، ولا يكرره
-    إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد."""
     name = STOCK_NAMES.get(sym, sym)
     was_armed = st.session_state.armed.get(sym, True)
     if last < entry:
@@ -485,7 +497,6 @@ def check_candle_alert(trade_id: str, sym: str, candle_df: pd.DataFrame, topic: 
 if "trade_log" not in st.session_state:
     st.session_state.trade_log = []
 
-# صفقاتي المفتوحة — تُحفظ بشكل دائم عبر GitHub
 GITHUB_REPO = "abojumanh/saudi-live-chart"
 TRADES_FILE_PATH = "trades.json"
 
@@ -529,46 +540,45 @@ if "my_trades" not in st.session_state:
     st.session_state.my_trades = loaded_trades
     st.session_state.trade_id_counter = loaded_counter
 
-if "seen_ipos" not in st.session_state:
-    st.session_state.seen_ipos = set()
-if "last_ipo_check" not in st.session_state:
-    st.session_state.last_ipo_check = 0
+# مراقبة كل أسهم القائمة معاً (وضع اختياري)
+if ntfy_topic and watch_all:
+    sent_now = []
+    for wsym, d in watch_data.items():
+        w_stop = (d["high"] + d["low"]) / 2
+        w_entry = d["high"]
+        w_target = w_entry + 2 * (w_entry - w_stop)
+        w_last = d["last"]
+        if check_breakout_and_notify(wsym, w_last, w_entry, w_stop, w_target, ntfy_topic):
+            sent_now.append(wsym)
+        check_stop_proximity_and_notify(wsym, w_last, w_entry, w_stop, ntfy_topic)
+    if sent_now:
+        st.success(f"✅ تم إرسال تنبيه اختراق لجوالك عن: {', '.join(sent_now)}")
 
-if "seen_news_links" not in st.session_state:
-    st.session_state.seen_news_links = set()
-if "last_news_check" not in st.session_state:
-    st.session_state.last_news_check = 0
-
-# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)
-_now_ts = datetime.now(SA_TZ).timestamp()
-if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
-    check_new_ipos_and_notify(ntfy_topic)
-    st.session_state.last_ipo_check = _now_ts
-
-if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
-    check_stock_news_and_notify(ntfy_topic)
-    st.session_state.last_news_check = _now_ts
-
-
+# ============ صفقاتي المفتوحة ============
 st.markdown("### 💼 صفقاتي المفتوحة")
+
 with st.expander("➕ سجّل صفقة جديدة"):
-    trade_options = WATCHLIST
-    trade_labels = [f"{s} - {STOCK_NAMES[s]}" for s in trade_options]
-    trade_choice_label = st.selectbox("السهم", trade_labels, key="new_trade_symbol_select")
-    trade_symbol = trade_choice_label.split(" - ")[0]
+    tcol1, tcol2, tcol3 = st.columns(3)
+    with tcol1:
+        trade_options = WATCHLIST + [CUSTOM_OPTION]
+        trade_display = [f"{s} - {STOCK_NAMES[s]}" if s in STOCK_NAMES else s for s in trade_options]
+        trade_choice_display = st.selectbox("السهم", trade_display, key="new_trade_symbol")
+        trade_choice = trade_choice_display.split(" - ")[0] if " - " in trade_choice_display else trade_choice_display
+        if trade_choice == CUSTOM_OPTION:
+            trade_symbol = st.text_input("اكتب رمز السهم (رقم فقط)", key="new_trade_symbol_custom").strip()
+        else:
+            trade_symbol = trade_choice
+    with tcol2:
+        trade_entry = st.number_input("سعر الدخول (ر.س)", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="new_trade_entry")
+        trade_qty = st.number_input("الكمية (عدد الأسهم)", min_value=0.0, value=0.0, step=1.0, key="new_trade_qty")
+    with tcol3:
+        trade_stop = st.number_input("وقف الخسارة (ر.س) — اتركه 0 للحساب التلقائي", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="new_trade_stop")
+        trade_target = st.number_input("الهدف (ر.س) — اتركه 0 للحساب التلقائي", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="new_trade_target")
 
-    tc1, tc2 = st.columns(2)
-    with tc1:
-        trade_entry = st.number_input("سعر الدخول (ر.س)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
-        trade_qty = st.number_input("عدد الأسهم", min_value=0, value=0, step=1)
-    with tc2:
-        trade_stop = st.number_input("وقف الخسارة (ر.س) — اتركه 0 للحساب التلقائي", min_value=0.0, value=0.0, step=0.01, format="%.2f")
-        trade_target = st.number_input("الهدف (ر.س) — اتركه 0 للحساب التلقائي", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+    candle_alert_enabled = st.checkbox("🕯️ فعّل تنبيه فتح/إغلاق الشمعة لهذه الصفقة", value=False, key="new_trade_candle")
 
-    trade_candle_alerts = st.checkbox("🕯️ فعّل تنبيه فتح/إغلاق الشمعة لهذه الصفقة", value=False)
-
-    if st.button("إضافة الصفقة"):
-        if trade_entry > 0 and trade_qty > 0:
+    if st.button("إضافة الصفقة", key="add_trade_btn"):
+        if trade_symbol and trade_entry > 0 and trade_qty > 0:
             st.session_state.trade_id_counter += 1
             st.session_state.my_trades.append({
                 "id": st.session_state.trade_id_counter,
@@ -577,56 +587,59 @@ with st.expander("➕ سجّل صفقة جديدة"):
                 "qty": trade_qty,
                 "stop": trade_stop if trade_stop > 0 else None,
                 "target": trade_target if trade_target > 0 else None,
-                "candle_alerts": trade_candle_alerts,
+                "candle_alerts": candle_alert_enabled,
             })
             save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
             st.success(f"✅ تمت إضافة صفقة {trade_symbol}")
+        else:
+            st.warning("عبّئ السهم وسعر الدخول والكمية على الأقل")
 
 if not st.session_state.my_trades:
     st.caption("لا توجد صفقات مسجّلة بعد. اضغط أعلاه لإضافة صفقتك الأولى.")
+else:
+    trades_to_remove = []
+    for trade in st.session_state.my_trades:
+        t_session, t_high, t_low, _ = fetch_and_prepare(trade["symbol"])
+        if t_session is None:
+            st.warning(f"⚠️ لا توجد بيانات حالياً لسهم {trade['symbol']}")
+            continue
 
-trades_to_remove = []
-for trade in st.session_state.my_trades:
-    t_session, t_high, t_low, _ = fetch_and_prepare(trade["symbol"])
-    if t_session is None:
-        continue
-    t_last = float(t_session["Close"].iloc[-1])
-    t_stop = trade["stop"] if trade["stop"] else (t_high + t_low) / 2 if t_high else trade["entry"] * 0.98
-    t_target = trade["target"] if trade["target"] else trade["entry"] + 2 * (trade["entry"] - t_stop)
+        t_last = float(t_session["Close"].iloc[-1])
+        t_stop = trade["stop"] or ((t_high + t_low) / 2)
+        t_target = trade["target"] or (trade["entry"] + 2 * (trade["entry"] - t_stop))
+        pnl = (t_last - trade["entry"]) * trade["qty"]
+        pnl_pct = ((t_last - trade["entry"]) / trade["entry"]) * 100 if trade["entry"] else 0
+        pnl_color = "#0a8a3f" if pnl >= 0 else "#d0332f"
+        name = STOCK_NAMES.get(trade["symbol"], trade["symbol"])
 
-    pnl = (t_last - trade["entry"]) * trade["qty"]
-    pnl_pct = ((t_last - trade["entry"]) / trade["entry"]) * 100 if trade["entry"] else 0
-    pnl_color = "#0a8a3f" if pnl >= 0 else "#d0332f"
-    name = STOCK_NAMES.get(trade["symbol"], trade["symbol"])
+        tc1, tc2 = st.columns([4, 1])
+        with tc1:
+            st.markdown(
+                f"""
+                <div style="border:1px solid #ddd; border-radius:10px; padding:10px 14px; margin-bottom:6px;">
+                    <b>{name} ({trade['symbol']})</b> — دخول: {trade['entry']:.2f} ر.س × {trade['qty']:.0f} سهم
+                    &nbsp;|&nbsp; السعر الحالي: {t_last:.2f} ر.س
+                    &nbsp;|&nbsp; الوقف: {t_stop:.2f} ر.س &nbsp;|&nbsp; الهدف: {t_target:.2f} ر.س<br>
+                    <span style="color:{pnl_color}; font-weight:bold;">
+                        {'+' if pnl >= 0 else ''}{pnl:.2f} ر.س ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)
+                    </span>
+                    {' — 🕯️ تنبيه الشمعة مفعّل' if trade['candle_alerts'] else ''}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with tc2:
+            if st.button("🗑️ بيعتها", key=f"remove_trade_{trade['id']}"):
+                trades_to_remove.append(trade["id"])
 
-    tc1, tc2 = st.columns([5, 1])
-    with tc1:
-        st.markdown(
-            f"""
-            <div style="border:1px solid #ddd; border-radius:8px; padding:10px; margin-bottom:6px;">
-                <b>{name} ({trade['symbol']})</b> — دخول: {trade['entry']:.2f} ر.س × {trade['qty']:.0f} سهم
-                &nbsp;|&nbsp; السعر الحالي: {t_last:.2f} ر.س
-                &nbsp;|&nbsp; الوقف: {t_stop:.2f} ر.س &nbsp;|&nbsp; الهدف: {t_target:.2f} ر.س<br>
-                <span style="color:{pnl_color}; font-weight:bold;">
-                    {'+' if pnl >= 0 else ''}{pnl:.2f} ر.س ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)
-                </span>
-                {' — 🕯️ تنبيه الشمعة مفعّل' if trade['candle_alerts'] else ''}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with tc2:
-        if st.button("🗑️ بعتها", key=f"remove_trade_{trade['id']}"):
-            trades_to_remove.append(trade["id"])
+        if ntfy_topic:
+            check_target_proximity_and_notify(str(trade["id"]), trade["symbol"], t_last, trade["entry"], t_target, ntfy_topic)
+            check_stop_proximity_and_notify(trade["symbol"], t_last, trade["entry"], t_stop, ntfy_topic, key_id=str(trade["id"]))
 
-    if ntfy_topic:
-        check_target_proximity_and_notify(str(trade["id"]), trade["symbol"], t_last, trade["entry"], t_target, ntfy_topic)
-        check_stop_proximity_and_notify(trade["symbol"], t_last, trade["entry"], t_stop, ntfy_topic, key_id=str(trade["id"]))
-
-if trades_to_remove:
-    st.session_state.my_trades = [t for t in st.session_state.my_trades if t["id"] not in trades_to_remove]
-    save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
-    st.rerun()
+    if trades_to_remove:
+        st.session_state.my_trades = [t for t in st.session_state.my_trades if t["id"] not in trades_to_remove]
+        save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
+        st.rerun()
 
 raw_data = fetch_raw_data(symbol)
 
@@ -727,7 +740,6 @@ reward_amount = target_price - entry_price
 rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
 st.info(f"⚖️ نسبة المخاطرة إلى العائد: **1 : {rr_ratio:.1f}** — (مخاطرة {risk_amount:.2f} ر.س مقابل عائد محتمل {reward_amount:.2f} ر.س)")
 
-# حاسبة صفقتك الفعلية — أدخل الكمية وسعر دخولك الحقيقي لترى ربحك/خسارتك الحية
 with st.expander("🧮 حاسبة صفقتي (اختياري)"):
     calc_col1, calc_col2 = st.columns(2)
     with calc_col1:
@@ -754,43 +766,190 @@ with st.expander("🧮 حاسبة صفقتي (اختياري)"):
     else:
         st.caption("أدخل الكمية وسعر الدخول لحساب ربحك أو خسارتك الحالية تلقائياً")
 
-st.markdown("---")
-st.markdown("##### 📊 مستويات اليوم")
-lv1, lv2, lv3, lv4 = st.columns(4)
-lv1.metric("أعلى سعر اليوم", f"{day_high:.2f} ر.س")
-lv2.metric("أدنى سعر اليوم", f"{day_low:.2f} ر.س")
-lv3.metric("نطاق الافتتاح (أعلى)", f"{range_high:.2f} ر.س")
-lv4.metric("نطاق الافتتاح (أدنى)", f"{range_low:.2f} ر.س")
+col_a, col_b = st.columns(2)
 
-st.markdown("##### 🕯️ الشارت")
-candle_interval = st.selectbox(
-    "حجم الشمعة",
-    ["1 دقيقة", "5 دقائق", "15 دقيقة", "30 دقيقة", "60 دقيقة"],
-    index=1,
-)
-rule_map = {
-    "1 دقيقة": "1min", "5 دقائق": "5min", "15 دقيقة": "15min",
-    "30 دقيقة": "30min", "60 دقيقة": "60min",
-}
-chart_df = resample_ohlc(session, rule_map[candle_interval]) if candle_interval != "1 دقيقة" else session
-
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
-fig.add_trace(go.Candlestick(
-    x=chart_df.index, open=chart_df["Open"], high=chart_df["High"],
-    low=chart_df["Low"], close=chart_df["Close"], name=symbol,
-), row=1, col=1)
-fig.add_hline(y=entry_price, line_dash="dash", line_color="blue", annotation_text="دخول", row=1, col=1)
-fig.add_hline(y=stop_loss, line_dash="dash", line_color="red", annotation_text="وقف", row=1, col=1)
-fig.add_hline(y=target_price, line_dash="dash", line_color="green", annotation_text="هدف", row=1, col=1)
-fig.add_trace(go.Bar(x=chart_df.index, y=chart_df["Volume"], name="حجم التداول"), row=2, col=1)
-fig.update_layout(height=550, xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(fig, use_container_width=True)
+with col_a:
+    candle_choice = st.selectbox(
+        "حجم الشمعة",
+        ["1 دقيقة", "5 دقائق", "15 دقيقة", "30 دقيقة", "60 دقيقة"],
+        index=1,
+    )
+    candle_rule = {
+        "1 دقيقة": "1min", "5 دقائق": "5min", "15 دقيقة": "15min",
+        "30 دقيقة": "30min", "60 دقيقة": "60min",
+    }[candle_choice]
 
 if ntfy_topic:
     for trade in st.session_state.my_trades:
-        if trade["candle_alerts"] and trade["symbol"] == symbol:
-            check_candle_alert(str(trade["id"]), symbol, chart_df, ntfy_topic)
+        if not trade.get("candle_alerts"):
+            continue
+        t_raw = fetch_raw_data(trade["symbol"])
+        if t_raw is None:
+            continue
+        t_dates = available_trading_dates(t_raw)
+        if not t_dates:
+            continue
+        t_session_1m, _, _ = extract_session_for_date(t_raw, t_dates[0])
+        if t_session_1m is None or t_session_1m.empty:
+            continue
+        t_candles = resample_ohlc(t_session_1m, candle_rule) if candle_rule != "1min" else t_session_1m
+        check_candle_alert(str(trade["id"]), trade["symbol"], t_candles, ntfy_topic)
 
+with col_b:
+    window_choice = st.selectbox(
+        "المدة الزمنية المعروضة",
+        ["آخر 30 دقيقة", "آخر ساعة", "آخر ساعتين", "آخر 4 ساعات", "اليوم كامل"],
+        index=4,
+    )
+    window_minutes = {
+        "آخر 30 دقيقة": 30, "آخر ساعة": 60, "آخر ساعتين": 120,
+        "آخر 4 ساعات": 240, "اليوم كامل": None,
+    }[window_choice]
+
+col_c, col_d = st.columns(2)
+
+with col_c:
+    show_sma = st.checkbox("إظهار المتوسط المتحرك (SMA)", value=False)
+
+with col_d:
+    sma_period = st.number_input(
+        "عدد الشموع في المتوسط", min_value=2, max_value=100, value=20, step=1,
+        disabled=not show_sma,
+    )
+
+show_vwap = st.checkbox("إظهار VWAP (متوسط السعر المرجّح بالحجم)", value=True)
+
+resampled = resample_ohlc(session, candle_rule) if candle_rule != "1min" else session
+
+if show_sma:
+    resampled["SMA"] = resampled["Close"].rolling(window=int(sma_period)).mean()
+
+if show_vwap:
+    typical_price = (resampled["High"] + resampled["Low"] + resampled["Close"]) / 3
+    resampled["VWAP"] = (typical_price * resampled["Volume"]).cumsum() / resampled["Volume"].cumsum()
+
+if window_minutes is not None:
+    cutoff = resampled.index[-1] - pd.Timedelta(minutes=window_minutes)
+    chart_session = resampled[resampled.index >= cutoff]
+    if chart_session.empty:
+        chart_session = resampled
+else:
+    chart_session = resampled
+
+fig = make_subplots(
+    rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
+    vertical_spacing=0.03,
+)
+
+fig.add_trace(go.Candlestick(
+    x=chart_session.index, open=chart_session["Open"], high=chart_session["High"],
+    low=chart_session["Low"], close=chart_session["Close"], name=symbol,
+), row=1, col=1)
+
+if show_sma and "SMA" in chart_session.columns:
+    fig.add_trace(go.Scatter(
+        x=chart_session.index, y=chart_session["SMA"],
+        mode="lines", name=f"SMA {int(sma_period)}",
+        line=dict(color="#FF8C00", width=2),
+    ), row=1, col=1)
+
+if show_vwap and "VWAP" in chart_session.columns:
+    fig.add_trace(go.Scatter(
+        x=chart_session.index, y=chart_session["VWAP"],
+        mode="lines", name="VWAP",
+        line=dict(color="#8E24AA", width=2, dash="dot"),
+    ), row=1, col=1)
+
+fig.add_hline(y=entry_price, line_dash="dash", line_color="red", row=1, col=1)
+fig.add_annotation(
+    x=chart_session.index[len(chart_session) // 2], y=entry_price,
+    text=f"⬆️ دخول عند: {entry_price:.2f} ر.س", showarrow=False,
+    bgcolor="#0a8a3f", font=dict(color="white", size=12), yshift=12, row=1, col=1,
+)
+
+fig.add_hline(y=range_low, line_dash="dash", line_color="green", row=1, col=1)
+fig.add_annotation(
+    x=chart_session.index[-1], y=range_low,
+    text=f"دعم: {range_low:.2f} ر.س", showarrow=False,
+    font=dict(color="gray", size=11), yshift=-12, xanchor="right", row=1, col=1,
+)
+
+fig.add_hline(y=stop_loss, line_dash="dot", line_color="#d0332f", row=1, col=1)
+fig.add_annotation(
+    x=chart_session.index[len(chart_session) // 2], y=stop_loss,
+    text=f"⛔ توقف عند: {stop_loss:.2f} ر.س", showarrow=False,
+    bgcolor="#d0332f", font=dict(color="white", size=12), yshift=-12, row=1, col=1,
+)
+
+chart_open = float(chart_session["Open"].iloc[0])
+chart_high = float(chart_session["High"].max())
+chart_low = float(chart_session["Low"].min())
+
+fig.add_annotation(
+    x=chart_session.index[0], y=chart_open,
+    text=f"افتتاح: {chart_open:.2f} ر.س", showarrow=True, arrowhead=2,
+    font=dict(size=11), ax=-40, ay=-20, row=1, col=1,
+)
+
+idx_high = chart_session["High"].idxmax()
+fig.add_annotation(
+    x=idx_high, y=chart_high,
+    text=f"أعلى سعر: {chart_high:.2f} ر.س", showarrow=True, arrowhead=2,
+    font=dict(size=11), ax=0, ay=-30, row=1, col=1,
+)
+
+idx_low = chart_session["Low"].idxmin()
+fig.add_annotation(
+    x=idx_low, y=chart_low,
+    text=f"أدنى سعر: {chart_low:.2f} ر.س", showarrow=True, arrowhead=2,
+    font=dict(size=11), ax=0, ay=30, row=1, col=1,
+)
+
+fig.add_annotation(
+    x=chart_session.index[-1], y=last_price,
+    text=f"إغلاق حالي: {last_price:.2f} ر.س", showarrow=True, arrowhead=2,
+    font=dict(size=11, color=price_color), ax=40, ay=-20, row=1, col=1,
+)
+
+colors = ["green" if c >= o else "red" for o, c in zip(chart_session["Open"], chart_session["Close"])]
+fig.add_trace(go.Bar(x=chart_session.index, y=chart_session["Volume"], marker_color=colors, name="الحجم"), row=2, col=1)
+
+fig.update_layout(
+    xaxis_rangeslider_visible=False,
+    height=650,
+    template="plotly_white",
+    margin=dict(l=10, r=10, t=20, b=10),
+    font=dict(size=13),
+    uirevision="keep_zoom",
+    hovermode="x",
+    dragmode="pan",
+    hoverlabel=dict(bgcolor="white", font_size=14, font_color="black", bordercolor="#1E88E5"),
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,
+        "displaylogo": False,
+        "displayModeBar": True,
+        "modeBarButtonsToAdd": ["zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"],
+    },
+)
+st.caption(
+    "💡 الطريقة الأضمن للتكبير على الجوال: استخدم قائمة \"المدة الزمنية المعروضة\" أعلاه. "
+    "بديلاً، جرّب أزرار + و − أعلى يمين الشارت، أو السحب بإصبعين."
+)
+
+st.markdown("### 📋 سجل التنبيهات (هذه الجلسة)")
 if st.session_state.trade_log:
-    st.markdown("##### 🔔 سجل التنبيهات (هذه الجلسة)")
-    st.dataframe(pd.DataFrame(st.session_state.trade_log), use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(st.session_state.trade_log),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if st.button("🗑️ مسح السجل"):
+        st.session_state.trade_log = []
+        st.rerun()
+else:
+    st.caption("لا توجد تنبيهات بعد خلال هذه الجلسة.")
