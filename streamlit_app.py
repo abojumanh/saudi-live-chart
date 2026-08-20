@@ -6,11 +6,12 @@
 تداول الأحد-الخميس.
 """
 
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 import json
 import base64
 
 import pandas as pd
+import feedparser
 import requests
 import yfinance as yf
 import plotly.graph_objects as go
@@ -92,8 +93,29 @@ elif ntfy_choice == "بدون إشعارات (تعطيل)":
 else:
     ntfy_topic = ntfy_choice
 
+# كلمات مفتاحية إنجليزية تدل على خبر إيجابي محتمل (عناوين ياهو فاينانس
+# للأسهم السعودية تجي إنجليزي غالباً، حتى لو الشركة سعودية)
+POSITIVE_NEWS_KEYWORDS = [
+    "beats", "surge", "approval", "upgrade", "raises guidance",
+    "strong buy", "record revenue", "contract win",
+]
+
 watch_all = st.checkbox(
     "راقب كل أسهم القائمة معاً وأرسل تنبيه لأي اختراق (يحتاج قناة ntfy أعلاه)",
+    value=True,
+)
+
+watch_ipos = st.checkbox(
+    "🆕 فعّل تنبيه اكتتابات جديدة (يحتاج قناة ntfy أعلاه — ملاحظة: مصادر "
+    "البيانات المجانية تغطي الاكتتابات العالمية بشكل عام، وقد لا تشمل "
+    "كل اكتتابات تداول تحديداً)",
+    value=False,
+)
+
+watch_stock_news = st.checkbox(
+    "📰 فعّل تنبيه الأخبار الإيجابية لأسهم القائمة (يحتاج قناة ntfy أعلاه — "
+    "ملاحظة: تغطية الأخبار للأسهم السعودية عبر المصادر المجانية أضعف "
+    "بكثير من الأسهم الأمريكية)",
     value=False,
 )
 
@@ -166,24 +188,33 @@ def fetch_and_prepare(sym: str):
 
 @st.cache_data(ttl=120)
 def get_technical_outlook(sym: str):
-    """تحليل فني من تريدنج فيو لسوق تداول. لو فشل (رمز غير مدعوم
-    بمكتبة التحليل)، يرجع None ويُعرض 'غير متاح' بدون أي كسر بالتطبيق."""
-    try:
-        handler = TA_Handler(
-            symbol=sym,
-            screener="saudiarabia",
-            exchange="TADAWUL",
-            interval=Interval.INTERVAL_15_MINUTES,
-        )
-        summary = handler.get_analysis().summary
-        return {
-            "توصية": summary.get("RECOMMENDATION", "غير متاح"),
-            "شراء": summary.get("BUY", 0),
-            "بيع": summary.get("SELL", 0),
-            "محايد": summary.get("NEUTRAL", 0),
-        }
-    except Exception:
-        return None
+    """تحليل فني من تريدنج فيو لسوق تداول. المكتبة غير موثقة رسمياً
+    لاسم screener الصحيح للسوق السعودي، فنجرب عدة احتمالات معروفة
+    بالترتيب. لو فشلت كلها (تحليل تريدنج فيو فعلاً غير مدعوم لهذا
+    الرمز)، يرجع None ويُعرض 'غير متاح' بصراحة."""
+    candidates = [
+        ("saudiarabia", "TADAWUL"),
+        ("ksa", "TADAWUL"),
+        ("tadawul", "TADAWUL"),
+    ]
+    for screener_name, exchange_name in candidates:
+        try:
+            handler = TA_Handler(
+                symbol=sym,
+                screener=screener_name,
+                exchange=exchange_name,
+                interval=Interval.INTERVAL_15_MINUTES,
+            )
+            summary = handler.get_analysis().summary
+            return {
+                "توصية": summary.get("RECOMMENDATION", "غير متاح"),
+                "شراء": summary.get("BUY", 0),
+                "بيع": summary.get("SELL", 0),
+                "محايد": summary.get("NEUTRAL", 0),
+            }
+        except Exception:
+            continue
+    return None
 
 
 watch_data = {}
@@ -277,6 +308,76 @@ def send_ntfy_alert(topic: str, title: str, message: str, click_url: str = "") -
         return True
     except Exception:
         return False
+
+
+def check_new_ipos_and_notify(topic: str):
+    """يفحص اكتتابات جديدة عبر Finnhub (تغطية عالمية عامة، مو مخصصة
+    لتداول تحديداً)، ويرسل تنبيه لكل اكتتاب جديد لم يُرسل عنه من قبل."""
+    if not topic:
+        return
+    try:
+        api_key = st.secrets.get("finnhub_api_key_sa", "")
+        if not api_key:
+            return
+        today = datetime.now(SA_TZ).date()
+        from_date = today.isoformat()
+        to_date = (today + timedelta(days=7)).isoformat()
+        url = (
+            f"https://finnhub.io/api/v1/calendar/ipo"
+            f"?from={from_date}&to={to_date}&token={api_key}"
+        )
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return
+        ipos = resp.json().get("ipoCalendar", [])
+        for ipo in ipos:
+            symbol_ipo = ipo.get("symbol", "")
+            name_ipo = ipo.get("name", "")
+            ipo_date = ipo.get("date", "")
+            if not symbol_ipo or symbol_ipo in st.session_state.seen_ipos:
+                continue
+            st.session_state.seen_ipos.add(symbol_ipo)
+            search_query = f"{name_ipo} {symbol_ipo} IPO".replace(" ", "+")
+            click_url = f"https://www.google.com/search?q={search_query}&tbm=nws"
+            send_ntfy_alert(
+                topic,
+                f"🆕 اكتتاب جديد: {symbol_ipo}",
+                f"{name_ipo} — تاريخ الاكتتاب المتوقع: {ipo_date}",
+                click_url=click_url,
+            )
+    except Exception:
+        pass
+
+
+def check_stock_news_and_notify(topic: str):
+    """يفحص أخبار كل سهم من القائمة عبر RSS ياهو فاينانس (رمز.SR)،
+    ويرسل تنبيه فقط للأخبار اللي عنوانها يحتوي كلمة مفتاحية إيجابية."""
+    if not topic:
+        return
+    for sym in WATCHLIST:
+        try:
+            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}.SR&region=US&lang=en-US"
+            feed = feedparser.parse(rss_url)
+            for entry in feed.entries[:5]:
+                link = entry.get("link", "")
+                title = entry.get("title", "")
+                if not link or link in st.session_state.seen_news_links:
+                    continue
+                title_lower = title.lower()
+                matched_keyword = next(
+                    (kw for kw in POSITIVE_NEWS_KEYWORDS if kw in title_lower), None
+                )
+                st.session_state.seen_news_links.add(link)
+                if matched_keyword:
+                    name = STOCK_NAMES.get(sym, sym)
+                    send_ntfy_alert(
+                        topic,
+                        f"📰 خبر إيجابي عن {name} ({sym})",
+                        title,
+                        click_url=link,
+                    )
+        except Exception:
+            continue
 
 
 def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
@@ -427,6 +528,27 @@ if "my_trades" not in st.session_state:
     loaded_trades, loaded_counter = load_trades_from_github()
     st.session_state.my_trades = loaded_trades
     st.session_state.trade_id_counter = loaded_counter
+
+if "seen_ipos" not in st.session_state:
+    st.session_state.seen_ipos = set()
+if "last_ipo_check" not in st.session_state:
+    st.session_state.last_ipo_check = 0
+
+if "seen_news_links" not in st.session_state:
+    st.session_state.seen_news_links = set()
+if "last_news_check" not in st.session_state:
+    st.session_state.last_news_check = 0
+
+# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)
+_now_ts = datetime.now(SA_TZ).timestamp()
+if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
+    check_new_ipos_and_notify(ntfy_topic)
+    st.session_state.last_ipo_check = _now_ts
+
+if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
+    check_stock_news_and_notify(ntfy_topic)
+    st.session_state.last_news_check = _now_ts
+
 
 st.markdown("### 💼 صفقاتي المفتوحة")
 with st.expander("➕ سجّل صفقة جديدة"):
@@ -605,6 +727,33 @@ reward_amount = target_price - entry_price
 rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
 st.info(f"⚖️ نسبة المخاطرة إلى العائد: **1 : {rr_ratio:.1f}** — (مخاطرة {risk_amount:.2f} ر.س مقابل عائد محتمل {reward_amount:.2f} ر.س)")
 
+# حاسبة صفقتك الفعلية — أدخل الكمية وسعر دخولك الحقيقي لترى ربحك/خسارتك الحية
+with st.expander("🧮 حاسبة صفقتي (اختياري)"):
+    calc_col1, calc_col2 = st.columns(2)
+    with calc_col1:
+        my_shares = st.number_input("عدد الأسهم اللي اشتريتها", min_value=0.0, value=0.0, step=1.0)
+    with calc_col2:
+        my_entry = st.number_input("سعر دخولك الفعلي (ر.س)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+
+    if my_shares > 0 and my_entry > 0:
+        pnl_dollars = (last_price - my_entry) * my_shares
+        pnl_pct = ((last_price - my_entry) / my_entry) * 100
+        pnl_color = "#0a8a3f" if pnl_dollars >= 0 else "#d0332f"
+        pnl_sign = "+" if pnl_dollars >= 0 else ""
+        st.markdown(
+            f"""
+            <div style="font-size:32px; font-weight:bold; color:{pnl_color};">
+                {pnl_sign}{pnl_dollars:.2f} ر.س ({pnl_sign}{pnl_pct:.2f}%)
+            </div>
+            <div style="font-size:14px; color:gray;">
+                القيمة الحالية: {(last_price * my_shares):.2f} ر.س — التكلفة الأصلية: {(my_entry * my_shares):.2f} ر.س
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("أدخل الكمية وسعر الدخول لحساب ربحك أو خسارتك الحالية تلقائياً")
+
 st.markdown("---")
 st.markdown("##### 📊 مستويات اليوم")
 lv1, lv2, lv3, lv4 = st.columns(4)
@@ -614,8 +763,15 @@ lv3.metric("نطاق الافتتاح (أعلى)", f"{range_high:.2f} ر.س")
 lv4.metric("نطاق الافتتاح (أدنى)", f"{range_low:.2f} ر.س")
 
 st.markdown("##### 🕯️ الشارت")
-candle_interval = st.radio("حجم الشمعة", ["1 دقيقة", "5 دقائق", "15 دقيقة"], horizontal=True, index=0)
-rule_map = {"1 دقيقة": "1min", "5 دقائق": "5min", "15 دقيقة": "15min"}
+candle_interval = st.selectbox(
+    "حجم الشمعة",
+    ["1 دقيقة", "5 دقائق", "15 دقيقة", "30 دقيقة", "60 دقيقة"],
+    index=1,
+)
+rule_map = {
+    "1 دقيقة": "1min", "5 دقائق": "5min", "15 دقيقة": "15min",
+    "30 دقيقة": "30min", "60 دقيقة": "60min",
+}
 chart_df = resample_ohlc(session, rule_map[candle_interval]) if candle_interval != "1 دقيقة" else session
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
