@@ -1,1 +1,1 @@
-{"trades": [{"id": 1, "symbol": "2222", "entry": 25.31, "qty": 400.0, "stop": 25.0, "target": 32.0, "candle_alerts": false}], "counter": 1}
+{"trades": [{"id": 1, "symbol": "2222", "entry": 25.31, "qty": 400.0, "stop": 25.0, "target": 32.0, "candle_alerts": false}, {"id": 2, "symbol": "1150", "entry": 23.35, "qty": 699.0, "stop": 23.0, "target": 30.0, "candle_alerts": false}], "counter": 2}
